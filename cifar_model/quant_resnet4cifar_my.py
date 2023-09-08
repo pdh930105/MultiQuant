@@ -2,9 +2,11 @@ import torch
 import torch.nn as nn
 import logging
 import os
+import sys
 from torch.hub import load_state_dict_from_url
-from model_cifar.quant_conv import QConv, QLinear, QConv3x3, QConv1x1, SwitchableBatchNorm2d
-from .shuffle_utils import channel_shuffle, CyclicShuffle
+from cifar_model.quant_conv import QConv, QLinear, QConv3x3, QConv1x1, SwitchableBatchNorm2d
+#from cifar_model.quant_conv import QConv, QLinear, QConv3x3, QConv1x1, SwitchableBatchNorm2d
+from cifar_model.shuffle_utils import channel_shuffle, CyclicShuffle
 
 __all__ = ['resnet20_quant', 'resnet8_quant']
 
@@ -220,3 +222,13 @@ def resnet20_quant(args, **kwargs):
 def resnet8_quant(args, **kwargs):
     return QResNet4Cifar(args, QBasicBlock4Cifar, [1, 1, 1], **kwargs)
 
+
+if __name__ == '__main__':
+    from easydict import EasyDict as edict
+    args = edict()
+    args['QWeightFlag'] = True
+    args['QActFlag'] = True
+    args['bkwd_scaling_factorW'] = 1.0
+    args['bkwd_scaling_factorA'] = 1.0
+    print(args.QWeightFlag)
+    print(resnet20_quant(args))

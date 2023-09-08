@@ -3,7 +3,7 @@ import torch.nn as nn
 import logging
 import os
 from torch.hub import load_state_dict_from_url
-from model_cifar.quant_conv_234 import QConv, QLinear, QConv3x3, QConv1x1, SwitchableBatchNorm2d
+from cifar_model.quant_conv_234 import QConv, QLinear, QConv3x3, QConv1x1, SwitchableBatchNorm2d
 from .shuffle_utils import channel_shuffle, CyclicShuffle
 
 __all__ = ['resnet20_quant', 'resnet8_quant']

@@ -5,7 +5,7 @@ import math
 
 import torch.nn as nn
 import torch.nn.init as init
-from model_cifar.quant_conv_234 import QConv, SwitchableBatchNorm2d
+from cifar_model.quant_conv import QConv, SwitchableBatchNorm2d
 import torch
 
 # __all__ = [

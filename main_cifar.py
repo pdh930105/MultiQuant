@@ -22,10 +22,10 @@ import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 from torch.utils.tensorboard import SummaryWriter
-from model_cifar.quant_resnet4cifar_my import *
-from model_cifar.quant_conv import QConv
-# from model_cifar.quant_resnet4cifar_my_234 import *
-# from model_cifar.quant_conv_234 import QConv
+from cifar_model.quant_resnet4cifar_my import *
+from cifar_model.quant_conv import QConv
+# from cifar_model.quant_resnet4cifar_my_234 import *
+# from cifar_model.quant_conv_234 import QConv
 from utils.utils import save_checkpoint, accuracy, AverageMeter, ProgressMeter, Time2Str, setup_logging, CrossEntropyLossSoft
 from option import args
 
