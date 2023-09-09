@@ -8,4 +8,5 @@ disutils==1.4.32
 setuptools==52.0.0
 protobuf==3.19.0
 torchinfo
+hydra-core
 thop==0.1.1.post2209072238
