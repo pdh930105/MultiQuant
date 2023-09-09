@@ -232,15 +232,11 @@ class QConv(nn.Conv2d):
             self.weight_levels = 2 ** 2
             self.uW = nn.ParameterList([nn.Parameter(data=torch.tensor(0).float()) for _ in range(4)])
             self.lW = nn.ParameterList([nn.Parameter(data=torch.tensor(0).float()) for _ in range(4)])
-            # not used
-            self.register_buffer('bkwd_scaling_factorW', torch.tensor(args.bkwd_scaling_factorW).float())
 
         if self.quan_act:
             self.act_levels = -1
             self.uA = nn.ParameterList([nn.Parameter(data=torch.tensor([0, 0, 0, 0, 0, 0, 0]).float()) for _ in range(4)])
             self.lA = nn.ParameterList([nn.Parameter(data=torch.tensor([0, 0, 0, 0, 0, 0, 0]).float()) for _ in range(4)])
-            # not used
-            self.register_buffer('bkwd_scaling_factorA', torch.tensor(args.bkwd_scaling_factorA).float())
 
         self.register_buffer('init', torch.tensor([0]))
 
