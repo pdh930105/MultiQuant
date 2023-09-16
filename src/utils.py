@@ -9,7 +9,6 @@ import numpy as np
 from thop import profile
 from thop import clever_format
 import shutil
-from multiquant.src.cal_flops_ops import *
 import torch
 logger = logging.getLogger(__name__)
 
@@ -73,7 +72,7 @@ class LogProgress:
             # logging is delayed by 1 it, in order to have the metrics from update
             if self._index >= 1 and self._index % log_every == 0:
                 self._log()
-
+            
     def _log(self):
         self._speed = (1 + self._index) / (time.time() - self._begin)
         infos = " | ".join(f"{k.capitalize()} {v}" for k, v in self._infos.items())
@@ -88,7 +87,6 @@ class LogProgress:
             out += " | " + infos
         self.logger.log(self.level, out)
 
-
 def colorize(text, color):
     code = f"\033[{color}m"
     restore = "\033[0m"
@@ -98,9 +96,6 @@ def colorize(text, color):
 def bold(text):
     return colorize(text, "1")
 
-
-
-
 class CrossEntropyLossSoft(torch.nn.modules.loss._Loss):
     """ inplace distillation for image classification """
     def forward(self, output, target):
@@ -109,7 +104,6 @@ class CrossEntropyLossSoft(torch.nn.modules.loss._Loss):
         output_log_prob = output_log_prob.unsqueeze(2)
         cross_entropy_loss = -torch.bmm(target, output_log_prob)
         return cross_entropy_loss
-
 
 def str2bool(v):
     if isinstance(v, bool):

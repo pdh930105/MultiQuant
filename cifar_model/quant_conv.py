@@ -127,7 +127,7 @@ class QConv(nn.Conv2d):
 
         FPweight, FPact = self.weight.detach(), x.detach()
         FPweight_1, FPweight_2, FPact_1, FPact_2 = self.select(FPweight, FPact)
-
+        
         out = self.conv(FPweight_1, FPweight_2, FPact_1, FPact_2, quantized=False)
         index = self.act_bit - 2
 

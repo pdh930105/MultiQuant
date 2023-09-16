@@ -1,0 +1,46 @@
+2023-09-16 02:43:00 - INFO - configs
+name: This is a experiments
+data: /dataset/imagenet/
+arch: mv1_quant
+workers: 20
+epochs: 90
+start_epoch: 0
+batch_size: 512
+optimizer_m: SGD
+optimizer_q: Adam
+lr_scheduler: cosine
+lr_m: 0.1
+lr_q: 0.0001
+lr_m_end: 0
+lr_q_end: 0
+decay_schedule: 40-80
+gamma: 0.1
+momentum: 0.9
+nesterov: False
+weight_decay: 0.0001
+pretrained: True
+model: None
+groups: 4
+print_freq: 200
+resume: 
+evaluate: False
+world_size: 4
+rank: 0
+dist_url: tcp://127.0.0.1:23456
+dist_backend: nccl
+seed: None
+gpu: 0
+multiprocessing_distributed: True
+bit_list: ['2', '4', '6', '8']
+QWeightFlag: True
+QActFlag: True
+weight_bit: 2
+act_bit: 8
+bkwd_scaling_factorW: 0.0
+bkwd_scaling_factorA: 0.0
+visible_gpus: 0,1,2,3
+log_dir: ./results/mv1/ImageNet_mv1_quant_2468/20230916_02_42
+datasetsname: ImageNet
+distributed: True
+
+2023-09-16 02:43:01 - INFO - args.bit_list: [2, 4, 6, 8]

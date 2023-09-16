@@ -119,14 +119,14 @@ class QBasicBlock4Cifar(nn.Module):
 
 
 class QResNet4Cifar(nn.Module):
-    def __init__(self, args, block, layers, num_classes=10, groups=1, norm_layer=None):
+    def __init__(self, args, block, layers, num_classes=10, norm_layer=None):
         super(QResNet4Cifar, self).__init__()
 
         if norm_layer is None:
             norm_layer = SwitchableBatchNorm2d
         self._norm_layer = norm_layer
 
-        self.groups = groups
+        self.groups = args.groups
         self.inplanes = 16 * self.groups
 
         self.conv1 = nn.Conv2d(3, self.inplanes, kernel_size=3, stride=1, padding=1, bias=False)
@@ -197,13 +197,11 @@ class QResNet4Cifar(nn.Module):
 
     def forward(self, x):
 
-
         out = self.conv1(x)
         out = self.bn1(out)
         out = self.relu(out)
 
         out = out.tile(1, self.groups, 1, 1)
-
         out = self.layer1(out)
         out = self.layer2(out)
         out = self.layer3(out)

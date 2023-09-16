@@ -49,9 +49,14 @@ def init(args, rendezvous_file):
 
 def average(metrics, count=1.):
     if world_size == 1:
-        return metrics
+        if not isinstance(metrics, torch.Tensor):
+            metrics = torch.tensor(metrics)
+        tensor = torch.tensor([metrics] + [1], device='cuda', dtype=torch.float32)
+        tensor[-1] = count
+        return (tensor[:-1] / tensor[-1]).cpu().numpy().tolist()
+           
     tensor = torch.tensor(list(metrics) + [1], device='cuda', dtype=torch.float32)
-    tensor *= count
+    tensor[-1] = count
     torch.distributed.all_reduce(tensor, op=torch.distributed.ReduceOp.SUM)
     return (tensor[:-1] / tensor[-1]).cpu().numpy().tolist()
 

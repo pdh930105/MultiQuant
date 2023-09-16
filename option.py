@@ -1,5 +1,5 @@
 import argparse
-from utils.utils import str2bool
+from src.utils import str2bool
 
 parser = argparse.ArgumentParser(description='PyTorch Implementation of MultiQuant')
 

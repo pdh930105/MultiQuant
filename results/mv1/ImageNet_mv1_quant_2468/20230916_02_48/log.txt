@@ -1,0 +1,65 @@
+2023-09-16 02:48:16 - INFO - configs
+name: This is a experiments
+data: /dataset/imagenet/
+arch: mv1_quant
+workers: 20
+epochs: 90
+start_epoch: 0
+batch_size: 256
+optimizer_m: SGD
+optimizer_q: Adam
+lr_scheduler: cosine
+lr_m: 0.1
+lr_q: 0.0001
+lr_m_end: 0
+lr_q_end: 0
+decay_schedule: 40-80
+gamma: 0.1
+momentum: 0.9
+nesterov: False
+weight_decay: 0.0001
+pretrained: True
+model: None
+groups: 4
+print_freq: 200
+resume: ./mv1-2468/checkpoint.pth.tar
+evaluate: False
+world_size: 4
+rank: 0
+dist_url: tcp://127.0.0.1:23456
+dist_backend: nccl
+seed: None
+gpu: 0
+multiprocessing_distributed: True
+bit_list: ['2', '4', '6', '8']
+QWeightFlag: True
+QActFlag: True
+weight_bit: 2
+act_bit: 8
+bkwd_scaling_factorW: 0.0
+bkwd_scaling_factorA: 0.0
+visible_gpus: 0,1,2,3
+log_dir: ./results/mv1/ImageNet_mv1_quant_2468/20230916_02_48
+datasetsname: ImageNet
+distributed: True
+
+2023-09-16 02:48:17 - INFO - args.bit_list: [2, 4, 6, 8]
+2023-09-16 02:48:36 - INFO - total params: 14162063, trainable model params: 13762760, trainable quantizer params: 1755, trainable bn params: 397548
+2023-09-16 02:48:36 - INFO - => loading checkpoint './mv1-2468/checkpoint.pth.tar'
+2023-09-16 02:48:36 - INFO - => loaded checkpoint './mv1-2468/checkpoint.pth.tar' (epoch 90)
+2023-09-16 02:48:46 - INFO - Epoch: [0][Weight 2bit] Test: [Act 2bit] Test: [  0/196]	Time 10.212 (10.212)	Loss 1.1395e+00 (1.1395e+00)	Acc@1  73.83 ( 73.83)	Acc@5  90.62 ( 90.62)
+2023-09-16 02:49:23 - INFO - Epoch: [0][W2bitA2bit][GPU0] * Acc@1 54.536 Acc@5 78.254
+2023-09-16 02:49:23 - INFO - act_bit: 2, weight_bit: 2, acc1: 54.5359992980957
+2023-09-16 02:49:33 - INFO - Epoch: [0][Weight 4bit] Test: [Act 4bit] Test: [  0/196]	Time 10.107 (10.107)	Loss 6.5110e-01 (6.5110e-01)	Acc@1  82.42 ( 82.42)	Acc@5  96.09 ( 96.09)
+2023-09-16 02:50:21 - INFO - Epoch: [0][W4bitA4bit][GPU0] * Acc@1 70.248 Acc@5 89.278
+2023-09-16 02:50:21 - INFO - act_bit: 4, weight_bit: 4, acc1: 70.24800109863281
+2023-09-16 02:50:32 - INFO - Epoch: [0][Weight 6bit] Test: [Act 6bit] Test: [  0/196]	Time 10.694 (10.694)	Loss 6.0692e-01 (6.0692e-01)	Acc@1  82.81 ( 82.81)	Acc@5  97.27 ( 97.27)
+2023-09-16 02:51:43 - INFO - Epoch: [0][W6bitA6bit][GPU0] * Acc@1 72.088 Acc@5 90.326
+2023-09-16 02:51:43 - INFO - act_bit: 6, weight_bit: 6, acc1: 72.08799743652344
+2023-09-16 02:51:54 - INFO - Epoch: [0][Weight 8bit] Test: [Act 8bit] Test: [  0/196]	Time 11.153 (11.153)	Loss 7.4890e-01 (7.4890e-01)	Acc@1  78.91 ( 78.91)	Acc@5  96.48 ( 96.48)
+2023-09-16 02:53:27 - INFO - Epoch: [0][W8bitA8bit][GPU0] * Acc@1 70.640 Acc@5 89.428
+2023-09-16 02:53:27 - INFO - act_bit: 8, weight_bit: 8, acc1: 70.63999938964844
+2023-09-16 02:53:27 - INFO - Epoch: [0][GPU0]current avg acc@1: 66.8779993057251
+2023-09-16 02:53:27 - INFO - Epoch: [0][GPU0] 1 epoch spends  4:51.63 mins	 remain  7:12 hours
+[2bit] 54.536	[4bit] 70.248	[6bit] 72.088	[8bit] 70.640	current best acc@1: 66.8779993057251
+

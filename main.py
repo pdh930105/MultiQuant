@@ -4,11 +4,14 @@ import socket
 import hydra
 
 logger = logging.getLogger(__name__)
+rank = 0
+local_rank = 0
+world_size = 1
 
 def run(args):
     import src.distrib as distrib
     import src.dataset as dataset
-    from src.trainer import Trainer
+    from cifar_trainer import Trainer
     import torch
     import torch.nn as nn
 
@@ -31,8 +34,6 @@ def run(args):
     data = {"tr": tr_loader, "tt": tt_loader}
     
     logger.debug(model)
-    model_size = sum(p.numel() for n, p in model.named_parameters()) * 4 / 2**20
-    logger.info("Model size: %.2f MB", model_size)
 
 
 def _main(args):
