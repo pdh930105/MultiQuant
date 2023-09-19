@@ -1,6 +1,6 @@
 from cifar_model.quant_resnet4cifar_my import resnet20_quant
 from easydict import EasyDict as edict
-from cifar_trainer import Trainer
+from trainer import Trainer
 
 def main():
     args = edict()

@@ -11,7 +11,7 @@ world_size = 1
 def run(args):
     import src.distrib as distrib
     import src.dataset as dataset
-    from cifar_trainer import Trainer
+    from trainer import Trainer
     import torch
     import torch.nn as nn
 

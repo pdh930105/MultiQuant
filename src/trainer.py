@@ -11,8 +11,10 @@ import time
 
 import torch
 import torch.nn as nn
+from easydict import EasyDict as edict
+
 import src.distrib as distrib
-from src.utils import bold, copy_state, LogProgress
+from src.utils import bold, copy_state, LogProgress, AverageMeter, accuracy
 
 
 logger = logging.getLogger(__name__)
@@ -22,7 +24,7 @@ class Trainer(object):
     def __init__(self, data, model, criterion, optimizer, args):
         self.tr_loader = data['tr']
         self.tt_loader = data['tt']
-        self.model = model
+        self.model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
         self.dmodel = distrib.wrap(model)
         self.optimizer = optimizer
         self.criterion = criterion
@@ -71,7 +73,29 @@ class Trainer(object):
 
         # for seperation tests
         self.args = args
-        self._reset()
+        self._load_or_init_quant()
+
+    def _init_quant_model(self):
+        # initialize quantization
+        for layers in self.model.modules():
+            if hasattr(layers, 'init'):
+                layers.init.data.fill_(1)
+
+        inputs, labels = next(iter(self.tr_loader))
+        inputs, labels = inputs.to(self.device), labels.to(self.device)
+        with torch.no_grad():
+            for bit in self.args.quant.bit_list:
+                print("bit : ", bit)
+                for name, layers in self.model.named_modules():
+                    if hasattr(layers, 'act_bit'):
+                        setattr(layers, "act_bit", int(bit))
+                    if hasattr(layers, 'weight_bit'):
+                        setattr(layers, "weight_bit", int(bit))    
+                self.model(inputs)
+
+        for layers in self.model.modules():
+            if hasattr(layers, 'init'):
+                layers.init.data.fill_(0)
 
     def _serialize(self, path):
         package = {}
@@ -89,13 +113,21 @@ class Trainer(object):
         torch.save(package, tmp_path)
         os.rename(tmp_path, path)
 
-    def _reset(self):
+    def _load_or_init_quant(self):
+        if self.args.pre_load_pretrained:
+            logger.info("Preload pretrained model")
+            return 
         load_from = None
-        # Reset
+        # load checkpoint if exists and not restart
         if self.checkpoint and self.checkpoint.exists() and not self.restart:
             load_from = self.checkpoint
         elif self.continue_from:
             load_from = self.continue_from
+        # initialize quantization
+        else:
+            if hasattr(self, '_init_quant_model'):
+                logger.info('Initializing quantization model')
+                self._init_quant_model()
 
         if load_from:
             logger.info(f'Loading checkpoint model: {load_from}')
@@ -118,6 +150,7 @@ class Trainer(object):
         # Optimizing the model
         if self.history:
             logger.info("Replaying metrics from previous run")
+
         for epoch, metrics in enumerate(self.history):
             info = " ".join(f"{k}={v:.5f}" for k, v in metrics.items())
             logger.info(f"Epoch {epoch}: {info}")
@@ -133,13 +166,10 @@ class Trainer(object):
             logger.info('-' * 70)
             logger.info("Training...")
             
-            train_loss, train_acc = self._run_one_epoch(epoch)
+            train_bit_info = self._run_one_epoch(epoch)
             
             logger.info(bold(f'Train Summary | End of Epoch {epoch + 1} | '
-                              f'Time {time.time() - start:.2f}s | train loss {train_loss:.5f} | '
-                              f'train accuracy {train_acc:.2f}'))
-            
-            
+                              f'Time {time.time() - start:.2f}s | \n {train_bit_info}'))
             
             # # Cross validation
             logger.info('-' * 70)
@@ -147,37 +177,39 @@ class Trainer(object):
             self.model.eval()  # Turn off Batchnorm & Dropout & Diffq
 
             with torch.no_grad():
-                valid_loss, valid_acc = self._run_one_epoch(epoch, cross_valid=True)
+                val_bit_info = self._run_one_epoch(epoch, validation=True)
             
-            logger.info(bold(f'Valid (Using gumbel) Summary | End of Epoch {epoch + 1} | '
-                             f'Time {time.time() - start:.2f}s | valid Loss {valid_loss:.5f} | '
-                             f'valid accuracy {valid_acc:.2f}'))
+            logger.info(bold(f'Valid Summary | End of Epoch {epoch + 1} | '
+                             f'Time {time.time() - start:.2f}s |\n {val_bit_info} '))
 
             if self.sched:
                 if self.args.lr_sched == 'plateau':
-                    self.sched.step(valid_loss)
+                    print("will support later")
+                    #self.sched.step(bit_info[''])
                 else:
                     self.sched.step()
                 new_lr = self.optimizer.state_dict()["param_groups"][0]["lr"]
                 logger.info(f'Learning rate adjusted: {new_lr:.5f}')
 
             best_loss = float('inf')
-            best_size = 0
-            best_acc = 0
+            best_acc1 = 0
+            best_acc5 = 0
             for metrics in self.history:
-                if metrics['valid'] < best_loss:
-                    best_size = metrics['model_flops']
-                    best_acc = metrics['valid_acc']
-                    best_loss = metrics['valid']
-            metrics = {'train': train_loss, 'train_acc': train_acc,
-                       'valid': valid_loss, 'valid_acc': valid_acc,
-                       'best': best_loss, 'best_size': best_size, 'best_acc': best_acc,
-                       'compressed_model_flops': self.compressed_model_flops,
-                       'model_flops': self.model_flops}
+                if metrics['avg_val_loss'] < best_loss:
+                    best_acc1 = metrics['avg_val_acc1']
+                    best_loss = metrics['avg_val_loss']
+                    best_acc5 = metrics['avg_val_acc5']
+            
+            metrics = {'avg_train_loss': train_bit_info['avg_loss'], 'avg_train_acc1': train_bit_info['avg_Acc1'],
+                        'avg_train_acc5': train_bit_info['avg_Acc5'],
+                       'avg_val_loss': val_bit_info['avg_loss'], 'avg_val_acc1': val_bit_info['avg_Acc1'],
+                        'avg_val_acc5': val_bit_info['avg_Acc5'],
+                       'best_loss': best_loss, 'best_acc1': best_acc1,
+                       'best_acc5': best_acc5}
 
             # Save the best model
-            if valid_loss == best_loss:
-                logger.info(bold('New best valid loss %.4f'), valid_loss)
+            if metrics['avg_val_loss'] == best_loss:
+                logger.info(bold('New best valid loss %.4f'), metrics['avg_val_loss'])
                 self.best_state = copy_state(self.model.state_dict())
 
             self.history.append(metrics)
@@ -192,67 +224,102 @@ class Trainer(object):
                     self._serialize(self.checkpoint)
                     logger.debug("Checkpoint saved to %s", self.checkpoint.resolve())
 
+    def evaluate(self):
+        self.model.eval()
+        start = time.time()
+        with torch.no_grad():
+            bit_info = self._run_one_epoch(0, validation=True)
+            logger.info(bold(f'Valid Summary | '
+                             f'Time {time.time() - start:.2f}s \n'
+                             f'{bit_info}'))
 
-    def _run_one_epoch(self, epoch, cross_valid=False, ori_model=False):
-        total_loss = 0
-        total = 0
-        correct = 0
-        data_loader = self.tr_loader if not cross_valid else self.tt_loader
+
+
+    def _run_one_epoch(self, epoch, validation=False, ori_model=False):
+
+        bit_loss_dict = edict()
+        bit_Acc1_dict = edict()
+        bit_Acc5_dict = edict()
+        for bit in self.args.quant.bit_list:
+            bit = str(bit)
+            bit_loss_dict[bit]=AverageMeter(f'{int(bit)}bit loss', ':.4f')
+            bit_Acc1_dict[bit]=AverageMeter(f'{int(bit)}bit Top 1 Acc', ':.4f')
+            bit_Acc5_dict[bit]=AverageMeter(f'{int(bit)}bit Top 5 Acc', ':.4f')
+        
+        data_loader = self.tr_loader if not validation else self.tt_loader
         data_loader.epoch = epoch
 
-        label = ["Train", "Valid"][cross_valid]
+        label = ["Train", "Valid"][validation]
         name = label + f" | Epoch {epoch + 1}"
         logprog = LogProgress(logger, data_loader, updates=self.num_prints, name=name)
         for i, (inputs, targets) in enumerate(logprog):
             inputs, targets = inputs.to(self.device), targets.to(self.device)
-            if not cross_valid:
-                with torch.cuda.amp.autocast(bool(self.args.mixed)):
-                    yhat = self.dmodel(inputs)
-                    loss = self.criterion(yhat, targets)            
-            elif hasattr(self.dmodel, 'module'):
-                yhat = self.dmodel.module.forward(inputs)
-                loss = self.criterion(yhat, targets)
-            else:
-                yhat = self.dmodel.forward(inputs)
-                loss = self.criterion(yhat, targets)
-                
-            if not cross_valid:
-                # optimize model in training mode
-                self.optimizer.zero_grad()
-                
-                if self.args.mixed:
-                    self.scaler.scale(loss).backward()
-                    self.scaler.unscale_(self.optimizer)
-                else:
-                    loss.backward()
+            for bit in self.args.quant.bit_list:
+                bit = str(bit)
+                for name, layers in self.dmodel.named_modules():
+                    if hasattr(layers, 'act_bit'):
+                        setattr(layers, "act_bit", int(bit))
+                    if hasattr(layers, 'weight_bit'):
+                        setattr(layers, "weight_bit", int(bit))
 
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(),
-                                               self.max_norm)
-                if self.args.mixed:
-                    self.scaler.step(self.optimizer)
+                if not validation:
+                    with torch.cuda.amp.autocast(bool(self.args.mixed)):
+                        yhat = self.dmodel(inputs)
+                        loss = self.criterion(yhat, targets)            
                 else:
-                    self.optimizer.step()
+                    if hasattr(self.dmodel, 'module'):
+                        yhat = self.dmodel.module.forward(inputs)
+                        loss = self.criterion(yhat, targets)
+                    else:
+                        yhat = self.dmodel.forward(inputs)
+                        loss = self.criterion(yhat, targets)
                 
-                if self.args.mixed:
-                    self.scaler.update()
+                if not validation:
+                    # optimize model in training mode
+                    self.optimizer.zero_grad()
+                    
+                    if self.args.mixed:
+                        self.scaler.scale(loss).backward()
+                        self.scaler.unscale_(self.optimizer)
+                    else:
+                        loss.backward()
 
-            total_loss += loss.item()
-            _, predicted = yhat.max(1)
-            total += targets.size(0)
-            correct += predicted.eq(targets).sum().item()
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(),
+                                                self.max_norm)
+                    if self.args.mixed:
+                        self.scaler.step(self.optimizer)
+                    else:
+                        self.optimizer.step()
+                    
+                    if self.args.mixed:
+                        self.scaler.update()
+
+                bit_loss_dict[bit].update(loss.item(), inputs.size(0))
+                acc1, acc5 = accuracy(yhat, targets, topk=(1, 5))
+                bit_Acc1_dict[bit].update(acc1[0], inputs.size(0))
+                bit_Acc5_dict[bit].update(acc5[0], inputs.size(0))
+                
+            bit_info = edict()
+            for bit in self.args.quant.bit_list:
+                bit = str(bit)
+                bit_info[f'{bit}_loss'] = bit_loss_dict[bit].avg
+                bit_info[f'{bit}_Acc1'] = bit_Acc1_dict[bit].avg
+                bit_info[f'{bit}_Acc5'] = bit_Acc5_dict[bit].avg
+                
+            logprog.update(**bit_info)
             
-            total_acc = 100. * (correct / total)
-            if cross_valid:
-                print(f"total_loss : {total_loss} total_acc : {total_acc}")
-            if not cross_valid:
-                logprog.update(
-                    loss=format(total_loss / (i + 1), ".5f"),
-                    accuracy=format(total_acc, ".5f"))
-            else:
-                logprog.update(loss=format(total_loss / (i + 1), ".5f"),
-                               accuracy=format(total_acc, ".5f"))
-            # Just in case, clear some memory
             del loss
+        
+        bit_info = edict()
+        for bit in self.args.quant.bit_list:
             
-        return (distrib.average([total_loss / (i + 1)], i + 1)[0],
-                distrib.average([total_acc], total)[0])
+            bit_info[f'{bit}_loss']= distrib.average(bit_loss_dict[bit].sum, bit_loss_dict[bit].count)[0]
+            bit_info[f'{bit}_Acc1']= distrib.average(bit_Acc1_dict[bit].sum, bit_loss_dict[bit].count)[0]
+            bit_info[f'{bit}_Acc5']= distrib.average(bit_Acc5_dict[bit].sum, bit_loss_dict[bit].count)[0]
+        
+        bit_info['avg_loss'] = sum([bit_info[f'{bit}_loss'] for bit in self.args.quant.bit_list]) / len(self.args.quant.bit_list)
+        bit_info['avg_Acc1'] = sum([bit_info[f'{bit}_Acc1'] for bit in self.args.quant.bit_list]) / len(self.args.quant.bit_list)
+        bit_info['avg_Acc5'] = sum([bit_info[f'{bit}_Acc5'] for bit in self.args.quant.bit_list]) / len(self.args.quant.bit_list)
+
+        print(bit_info)
+        return bit_info

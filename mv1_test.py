@@ -27,6 +27,7 @@ from imagenet_model.quant_conv import QConv, QConv_Tra_Mulit
 # from imagenet_model.quant_mv1_my_234 import *
 # from imagenet_model.quant_conv_234 import QConv, QConv_Tra_Mulit
 from src.utils import save_checkpoint, accuracy, AverageMeter, ProgressMeter, Time2Str, setup_logging, CrossEntropyLossSoft
+from src.dataset import get_loader
 from option import args
 import math
 
@@ -318,8 +319,14 @@ def main_worker(gpu, ngpus_per_node, args):
     cudnn.benchmark = True
 
     train_transforms, val_transforms, test_transforms = data_transforms(args)
-    train_set, val_set, test_set = dataset(train_transforms, val_transforms, test_transforms, args)
-    train_loader, val_loader, train_sampler = data_loader(train_set, val_set, test_set, args)
+    
+    #from easydict import EasyDict as edict
+    #db = edict()
+    
+    train_set, val_set, test_set = get_loader(args, 224)
+
+    #train_set, val_set, test_set = dataset(train_transforms, val_transforms, test_transforms, args)
+    #train_loader, val_loader, train_sampler = data_loader(train_set, val_set, test_set, args)
     criterion = nn.CrossEntropyLoss().cuda(args.gpu)
 
     model_params, quant_params, bn_params = cal_params(model, args)
