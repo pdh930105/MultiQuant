@@ -8,7 +8,7 @@ class QBasicBlock(nn.Module):
     expansion = 1
 
     def __init__(self, args, inplanes, planes, stride=1, downsample=None, groups=1,
-                 base_width=64, dilation=1, norm_layer=None, oneBit_outchannel=-1, oneBit_inchannel=-1, mid_oneBit=-1,
+                 base_width=64, dilation=1, norm_layer=None,
                  last_conv=False, first_conv=False, shuffle=False): # shuffle not works, mid_oneBit not works
         super(QBasicBlock, self).__init__()
         if norm_layer is None:
@@ -20,31 +20,26 @@ class QBasicBlock(nn.Module):
         # Both self.conv1 and self.downsample layers downsample the input when stride != 1
         if first_conv:
             self.conv1 = QConv3x3(args, inplanes, planes, stride, groups=groups,
-                                  oneBit_outchannel=oneBit_outchannel, oneBit_inchannel=oneBit_inchannel,
-                                  first_conv=first_conv)
+                                first_conv=first_conv)
         else:
             self.conv1 = QConv3x3(args, inplanes, planes, stride, groups=groups,
-                                  oneBit_outchannel=oneBit_outchannel, oneBit_inchannel=oneBit_inchannel)
-        self.bn1 = norm_layer(planes, groups=groups, oneBit_outchannel=oneBit_outchannel)
+                                    )
+        self.bn1 = norm_layer(planes, groups=groups)
         self.relu = nn.ReLU(inplace=True)
 
         if last_conv:
             self.conv2 = QConv3x3(args, planes, planes, groups=groups,
-                                  oneBit_outchannel=oneBit_outchannel, oneBit_inchannel=oneBit_outchannel,
                                   last_conv=last_conv)
-            self.bn2 = norm_layer(planes, groups=groups, oneBit_outchannel=oneBit_outchannel, last_conv=last_conv)
+            self.bn2 = norm_layer(planes, groups=groups,  last_conv=last_conv)
 
         else:
-            self.conv2 = QConv3x3(args, planes, planes, groups=groups,
-                              oneBit_outchannel=oneBit_outchannel, oneBit_inchannel=oneBit_outchannel)
-            self.bn2 = norm_layer(planes, groups=groups, oneBit_outchannel=oneBit_outchannel)
+            self.conv2 = QConv3x3(args, planes, planes, groups=groups)
+            self.bn2 = norm_layer(planes, groups=groups)
         self.downsample = downsample
         self.stride = stride
         self.groups = groups
         self.weight_bit = 2
         self.act_bit = 8
-        self.oneBit_outchannel = oneBit_outchannel
-        self.oneBit_inchannel = oneBit_inchannel
         self.last_conv = last_conv
         self.first_conv = first_conv
         self.inplanes = inplanes
@@ -53,15 +48,12 @@ class QBasicBlock(nn.Module):
         if (self.weight_bit & 1) == 0:
             index = self.inplanes // self.groups * (self.weight_bit // 2)
             return identity[:, :index, :, :]
-        else:
-            index = self.inplanes // self.groups * (self.weight_bit // 2) + self.oneBit_outchannel
-            return identity[:, :index, :, :]
 
     def addZeroS(self, identity):
         if (self.weight_bit & 1) == 0:
             return identity
         else:
-            index = self.inplanes // self.groups - self.oneBit_outchannel
+            index = self.inplanes // self.groups 
             zeros = torch.zeros(identity.shape[0], index, identity.shape[2], identity.shape[3]).cuda()
             out = torch.cat((identity, zeros), dim=1)
             return out
@@ -106,7 +98,7 @@ class QBottleneck(nn.Module):
     expansion = 4
 
     def __init__(self, args, inplanes, planes, stride=1, downsample=None, groups=1,
-                 base_width=64, dilation=1, norm_layer=None, oneBit_outchannel=-1, oneBit_inchannel=-1, mid_oneBit=-1,
+                 base_width=64, dilation=1, norm_layer=None,
                  last_conv=False, first_conv=False, shuffle=False): # shuffle not works
         super(QBottleneck, self).__init__()
         if norm_layer is None:
@@ -115,29 +107,26 @@ class QBottleneck(nn.Module):
 
         if first_conv:
             self.conv1 = QConv1x1(args, inplanes, width, groups=groups,
-                                  oneBit_outchannel=mid_oneBit, oneBit_inchannel=oneBit_inchannel,
                                   first_conv=first_conv)
         else:
-            self.conv1 = QConv1x1(args, inplanes, width, groups=groups,
-                                  oneBit_outchannel=mid_oneBit, oneBit_inchannel=oneBit_inchannel)
-        self.bn1 = norm_layer(width, groups=groups, oneBit_outchannel=mid_oneBit)
+            self.conv1 = QConv1x1(args, inplanes, width, groups=groups)
+        self.bn1 = norm_layer(width, groups=groups)
 
 
         self.conv2 = QConv3x3(args, width, width, stride, groups=groups,
-                              oneBit_outchannel=mid_oneBit, oneBit_inchannel=mid_oneBit)
-        self.bn2 = norm_layer(width, groups=groups, oneBit_outchannel=mid_oneBit)
+)
+        self.bn2 = norm_layer(width, groups=groups)
 
 
         if last_conv:
             self.conv3 = QConv1x1(args, width, planes * self.expansion, groups=groups,
-                                  oneBit_outchannel=oneBit_outchannel, oneBit_inchannel=mid_oneBit,
-                                  last_conv=last_conv)
-            self.bn3 = norm_layer(planes * self.expansion, groups=groups, oneBit_outchannel=oneBit_outchannel,
+                                   last_conv=last_conv)
+            self.bn3 = norm_layer(planes * self.expansion, groups=groups, 
                                   last_conv=last_conv)
         else:
             self.conv3 = QConv1x1(args, width, planes * self.expansion, groups=groups,
-                              oneBit_outchannel=oneBit_outchannel, oneBit_inchannel=mid_oneBit)
-            self.bn3 = norm_layer(planes * self.expansion, groups=groups, oneBit_outchannel=oneBit_outchannel)
+                               )
+            self.bn3 = norm_layer(planes * self.expansion, groups=groups)
 
         self.relu = nn.ReLU(inplace=True)
         self.downsample = downsample
@@ -145,8 +134,6 @@ class QBottleneck(nn.Module):
         self.groups = groups
         self.weight_bit = 2
         self.act_bit = 8
-        self.oneBit_outchannel = oneBit_outchannel
-        self.oneBit_inchannel = oneBit_inchannel
         self.last_conv = last_conv
         self.first_conv = first_conv
         self.inplanes = inplanes
@@ -163,7 +150,7 @@ class QBottleneck(nn.Module):
         if (self.weight_bit & 1) == 0:
             return identity
         else:
-            index = self.inplanes // self.groups - self.oneBit_outchannel
+            index = self.inplanes // self.groups
             zeros = torch.zeros(identity.shape[0], index, identity.shape[2], identity.shape[3]).cuda()
             out = torch.cat((identity, zeros), dim=1)
             return out
@@ -205,7 +192,6 @@ class QBottleneck(nn.Module):
 # for mobilenet
 class QDepthwiseSeparableConv(nn.Module):
     def __init__(self, args, inp=0, outp=0, stride=0,
-                 oneBit_outchannel=0, oneBit_inchannel=0,
                  last_conv=False, first_conv=False, channel_shuffle=False):
         super(QDepthwiseSeparableConv, self).__init__()
         assert stride in [1, 2]
@@ -219,17 +205,15 @@ class QDepthwiseSeparableConv(nn.Module):
         layers = [
             QConv_Tra_Mulit(inp, inp, kernel_size=3, stride=stride,
                             padding=1, groups=inp, bias=False, dilation=1, args=args,
-                            oneBit_outchannel=oneBit_inchannel,
                             basewidth=self.basewidth,
                             first_conv=first_conv),
-            SwitchableBatchNorm2d_Tra_Mulit(inp, basewidth=self.basewidth, oneBit_outchannel=oneBit_inchannel),
+            SwitchableBatchNorm2d_Tra_Mulit(inp, basewidth=self.basewidth),
             nn.ReLU(inplace=True),
 
             QConv(inp, outp, kernel_size=1, stride=1,
                      padding=0, groups=args.groups, bias=False, args=args,
-                     oneBit_outchannel=oneBit_outchannel, oneBit_inchannel=oneBit_inchannel,
-                     last_conv=last_conv),
-            SwitchableBatchNorm2d(outp, groups=args.groups, oneBit_outchannel=oneBit_outchannel),
+                      last_conv=last_conv),
+            SwitchableBatchNorm2d(outp, groups=args.groups),
             nn.ReLU(inplace=True),
         ]
         self.body = nn.Sequential(*layers)

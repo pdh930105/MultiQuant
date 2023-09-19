@@ -3,214 +3,16 @@
 import torch
 import torch.nn as nn
 from torch.hub import load_state_dict_from_url
-from imagenet_model.quant_conv import QConv, QLinear, QConv3x3, QConv1x1, SwitchableBatchNorm2d
+from .quant_modules import QConv, QLinear, SwitchableBatchNorm2d, QBasicBlock, QBottleneck, QDepthwiseSeparableConv
+from .quant_ops import QConv1x1, QConv3x3
 from .shuffle_utils import channel_shuffle
 
-__all__ = ['resnet18_quant', 'resnet34_quant', 'resnet50_quant']
+__all__ = ['resnet18_quant', 'resnet34_quant', 'resnet50_quant', 'mv1_quant', 'MobileNetV1']
 
 model_urls = {
     'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
     'resnet34': 'https://download.pytorch.org/models/resnet34-333f7ec4.pth',
 }
-
-
-class QBasicBlock(nn.Module):
-    expansion = 1
-
-    def __init__(self, args, inplanes, planes, stride=1, downsample=None, groups=1,
-                 base_width=64, dilation=1, norm_layer=None, oneBit_outchannel=-1, oneBit_inchannel=-1, mid_oneBit=-1,
-                 last_conv=False, first_conv=False, shuffle=False): # shuffle not works, mid_oneBit not works
-        super(QBasicBlock, self).__init__()
-        if norm_layer is None:
-            norm_layer = SwitchableBatchNorm2d
-        # if groups != 1 or base_width != 64:
-        #     raise ValueError('BasicBlock only supports groups=1 and base_width=64')
-        if dilation > 1:
-            raise NotImplementedError("Dilation > 1 not supported in BasicBlock")
-        # Both self.conv1 and self.downsample layers downsample the input when stride != 1
-        if first_conv:
-            self.conv1 = QConv3x3(args, inplanes, planes, stride, groups=groups,
-                                  oneBit_outchannel=oneBit_outchannel, oneBit_inchannel=oneBit_inchannel,
-                                  first_conv=first_conv)
-        else:
-            self.conv1 = QConv3x3(args, inplanes, planes, stride, groups=groups,
-                                  oneBit_outchannel=oneBit_outchannel, oneBit_inchannel=oneBit_inchannel)
-        self.bn1 = norm_layer(planes, groups=groups, oneBit_outchannel=oneBit_outchannel)
-        self.relu = nn.ReLU(inplace=True)
-
-        if last_conv:
-            self.conv2 = QConv3x3(args, planes, planes, groups=groups,
-                                  oneBit_outchannel=oneBit_outchannel, oneBit_inchannel=oneBit_outchannel,
-                                  last_conv=last_conv)
-            self.bn2 = norm_layer(planes, groups=groups, oneBit_outchannel=oneBit_outchannel, last_conv=last_conv)
-
-        else:
-            self.conv2 = QConv3x3(args, planes, planes, groups=groups,
-                              oneBit_outchannel=oneBit_outchannel, oneBit_inchannel=oneBit_outchannel)
-            self.bn2 = norm_layer(planes, groups=groups, oneBit_outchannel=oneBit_outchannel)
-        self.downsample = downsample
-        self.stride = stride
-        self.groups = groups
-        self.weight_bit = 2
-        self.act_bit = 8
-        self.oneBit_outchannel = oneBit_outchannel
-        self.oneBit_inchannel = oneBit_inchannel
-        self.last_conv = last_conv
-        self.first_conv = first_conv
-        self.inplanes = inplanes
-
-    def select(self, identity):
-        if (self.weight_bit & 1) == 0:
-            index = self.inplanes // self.groups * (self.weight_bit // 2)
-            return identity[:, :index, :, :]
-        else:
-            index = self.inplanes // self.groups * (self.weight_bit // 2) + self.oneBit_outchannel
-            return identity[:, :index, :, :]
-
-    def addZeroS(self, identity):
-        if (self.weight_bit & 1) == 0:
-            return identity
-        else:
-            index = self.inplanes // self.groups - self.oneBit_outchannel
-            zeros = torch.zeros(identity.shape[0], index, identity.shape[2], identity.shape[3]).cuda()
-            out = torch.cat((identity, zeros), dim=1)
-            return out
-
-    def forward(self, x):
-        identity = x
-
-        if self.first_conv:
-            identity = self.select(identity)
-
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
-
-        out = self.conv2(out)
-        out = self.bn2(out)
-
-        if self.last_conv:
-            identity = self.addZeroS(identity)
-
-        if self.downsample is not None:
-            out = channel_shuffle(out, self.weight_bit//2, self.weight_bit)
-            identity = self.downsample(x)
-
-        out += identity
-        out = self.relu(out)
-
-        if self.last_conv:
-            # if self.weight_bit == 2 or self.weight_bit == 4 or self.weight_bit == 6 or self.weight_bit == 8:
-            #     out = out.chunk(self.weight_bit // 2, dim=1)
-            # if self.weight_bit == 3 or self.weight_bit == 5 or self.weight_bit == 7:
-            #     out = out.chunk((self.weight_bit+1) // 2, dim=1)
-            out = out.chunk((self.weight_bit + 1) // 2, dim=1)
-
-            # out = torch.sum(torch.stack(out, dim=0), dim=0)
-            out = torch.mean(torch.stack(out, dim=0), dim=0)
-
-        return out
-
-
-class QBottleneck(nn.Module):
-    expansion = 4
-
-    def __init__(self, args, inplanes, planes, stride=1, downsample=None, groups=1,
-                 base_width=64, dilation=1, norm_layer=None, oneBit_outchannel=-1, oneBit_inchannel=-1, mid_oneBit=-1,
-                 last_conv=False, first_conv=False, shuffle=False): # shuffle not works
-        super(QBottleneck, self).__init__()
-        if norm_layer is None:
-            norm_layer = SwitchableBatchNorm2d
-        width = int(planes * (base_width / 64.))
-
-        if first_conv:
-            self.conv1 = QConv1x1(args, inplanes, width, groups=groups,
-                                  oneBit_outchannel=mid_oneBit, oneBit_inchannel=oneBit_inchannel,
-                                  first_conv=first_conv)
-        else:
-            self.conv1 = QConv1x1(args, inplanes, width, groups=groups,
-                                  oneBit_outchannel=mid_oneBit, oneBit_inchannel=oneBit_inchannel)
-        self.bn1 = norm_layer(width, groups=groups, oneBit_outchannel=mid_oneBit)
-
-
-        self.conv2 = QConv3x3(args, width, width, stride, groups=groups,
-                              oneBit_outchannel=mid_oneBit, oneBit_inchannel=mid_oneBit)
-        self.bn2 = norm_layer(width, groups=groups, oneBit_outchannel=mid_oneBit)
-
-
-        if last_conv:
-            self.conv3 = QConv1x1(args, width, planes * self.expansion, groups=groups,
-                                  oneBit_outchannel=oneBit_outchannel, oneBit_inchannel=mid_oneBit,
-                                  last_conv=last_conv)
-            self.bn3 = norm_layer(planes * self.expansion, groups=groups, oneBit_outchannel=oneBit_outchannel,
-                                  last_conv=last_conv)
-        else:
-            self.conv3 = QConv1x1(args, width, planes * self.expansion, groups=groups,
-                              oneBit_outchannel=oneBit_outchannel, oneBit_inchannel=mid_oneBit)
-            self.bn3 = norm_layer(planes * self.expansion, groups=groups, oneBit_outchannel=oneBit_outchannel)
-
-        self.relu = nn.ReLU(inplace=True)
-        self.downsample = downsample
-        self.stride = stride
-        self.groups = groups
-        self.weight_bit = 2
-        self.act_bit = 8
-        self.oneBit_outchannel = oneBit_outchannel
-        self.oneBit_inchannel = oneBit_inchannel
-        self.last_conv = last_conv
-        self.first_conv = first_conv
-        self.inplanes = inplanes
-
-    def select(self, identity):
-        if (self.weight_bit & 1) == 0:
-            index = self.inplanes // self.groups * (self.weight_bit // 2)
-            return identity[:, :index, :, :]
-        else:
-            index = self.inplanes // self.groups * ((self.weight_bit+1) // 2)
-            return identity[:, :index, :, :]
-
-    def addZeroS(self, identity):
-        if (self.weight_bit & 1) == 0:
-            return identity
-        else:
-            index = self.inplanes // self.groups - self.oneBit_outchannel
-            zeros = torch.zeros(identity.shape[0], index, identity.shape[2], identity.shape[3]).cuda()
-            out = torch.cat((identity, zeros), dim=1)
-            return out
-
-    def forward(self, x):
-        identity = x
-
-        if self.first_conv:
-            identity = self.select(identity)
-
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
-
-        out = self.conv2(out)
-        out = self.bn2(out)
-        out = self.relu(out)
-
-        out = self.conv3(out)
-        out = self.bn3(out)
-
-        if self.last_conv:
-            identity = self.addZeroS(identity)
-
-        if self.downsample is not None:
-            # out = channel_shuffle(out, self.weight_bit // 2, self.weight_bit)
-            identity = self.downsample(identity)
-
-        out += identity
-        out = self.relu(out)
-
-        if self.last_conv:
-            out = out.chunk((self.weight_bit + 1) // 2, dim=1)
-            out = torch.mean(torch.stack(out, dim=0), dim=0)
-
-        return out
-
 
 class QResNet(nn.Module):
 
@@ -241,43 +43,34 @@ class QResNet(nn.Module):
 
         if args.arch == 'resnet18_quant':
             self.layer1 = self._make_layer(args, block, 64 * self.groups, layers[0],
-                                        oneBit_outchannel=40, oneBit_inchannel=64, first_conv=True)
+                                         first_conv=True)
             self.layer2 = self._make_layer(args, block, 128 * self.groups, layers[1], stride=2,
                                         dilate=replace_stride_with_dilation[0],
-                                        oneBit_outchannel=76, oneBit_inchannel=40)
+                                        )
             self.layer3 = self._make_layer(args, block, 256 * self.groups, layers[2], stride=2,
-                                        dilate=replace_stride_with_dilation[1],
-                                        oneBit_outchannel=184, oneBit_inchannel=76)
+                                        dilate=replace_stride_with_dilation[1])
             self.layer4 = self._make_layer(args, block, 512 * self.groups, layers[3], stride=2,
-                                        dilate=replace_stride_with_dilation[2],
-                                        oneBit_outchannel=396, oneBit_inchannel=184, last_conv=True)
+                                        dilate=replace_stride_with_dilation[2], last_conv=True)
             
         elif args.arch == 'resnet34_quant':
-            self.layer1 = self._make_layer(args, block, 64 * self.groups, layers[0],
-                                        oneBit_outchannel=39, oneBit_inchannel=64, first_conv=True)
+            self.layer1 = self._make_layer(args, block, 64 * self.groups, layers[0], first_conv=True)
             self.layer2 = self._make_layer(args, block, 128 * self.groups, layers[1], stride=2,
-                                        dilate=replace_stride_with_dilation[0],
-                                        oneBit_outchannel=78, oneBit_inchannel=39)
+                                        dilate=replace_stride_with_dilation[0]
+                                        )
             self.layer3 = self._make_layer(args, block, 256 * self.groups, layers[2], stride=2,
-                                        dilate=replace_stride_with_dilation[1],
-                                        oneBit_outchannel=188, oneBit_inchannel=78)
+                                        dilate=replace_stride_with_dilation[1])
             self.layer4 = self._make_layer(args, block, 512 * self.groups, layers[3], stride=2,
-                                        dilate=replace_stride_with_dilation[2],
-                                        oneBit_outchannel=400, oneBit_inchannel=188, last_conv=True)
+                                        dilate=replace_stride_with_dilation[2], last_conv=True)
             
         elif args.arch == 'resnet50_quant':
-            self.layer1 = self._make_layer(args, block, 64 * self.groups, layers[0],
-                                        oneBit_outchannel=208, oneBit_inchannel=64, mid_oneBit=40, first_conv=True)
+            self.layer1 = self._make_layer(args, block, 64 * self.groups, layers[0], first_conv=True)
             self.layer2 = self._make_layer(args, block, 128 * self.groups, layers[1], stride=2,
-                                        dilate=replace_stride_with_dilation[0],
-                                        oneBit_outchannel=416, oneBit_inchannel=208, mid_oneBit=80)
+                                        dilate=replace_stride_with_dilation[0])
             self.layer3 = self._make_layer(args, block, 256 * self.groups, layers[2], stride=2,
-                                        dilate=replace_stride_with_dilation[1],
-                                        oneBit_outchannel=832, oneBit_inchannel=416, mid_oneBit=160)
+                                        dilate=replace_stride_with_dilation[1])
             self.layer4 = self._make_layer(args, block, 512 * self.groups, layers[3], stride=2,
                                         dilate=replace_stride_with_dilation[2],
-                                        oneBit_outchannel=2048, oneBit_inchannel=832,
-                                        mid_oneBit=320, last_conv=True)
+                                        last_conv=True)
 
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.fc = nn.Linear(512 * block.expansion, num_classes)  # the last layer uses fp weights
@@ -300,7 +93,7 @@ class QResNet(nn.Module):
                     nn.init.constant_(m.bn2.weight, 0)
 
     def _make_layer(self, args, block, planes, blocks, stride=1, dilate=False,
-                    oneBit_outchannel=-1, oneBit_inchannel=-1, mid_oneBit=-1, last_conv=False, first_conv=False):
+                    last_conv=False, first_conv=False):
         norm_layer = self._norm_layer
         downsample = None
         previous_dilation = self.dilation
@@ -309,31 +102,24 @@ class QResNet(nn.Module):
             stride = 1
         if stride != 1 or self.inplanes != planes * block.expansion:
             downsample = nn.Sequential(
-                QConv1x1(args, self.inplanes, planes * block.expansion, stride, groups=self.groups,
-                         oneBit_outchannel=oneBit_outchannel, oneBit_inchannel=oneBit_inchannel),
-                norm_layer(planes * block.expansion, groups=self.groups, oneBit_outchannel=oneBit_outchannel),
+                QConv1x1(args, self.inplanes, planes * block.expansion, stride, groups=self.groups),
+                norm_layer(planes * block.expansion, groups=self.groups),
             )
 
         layers = []
         layers.append(block(args, self.inplanes, planes, stride, downsample, self.groups,
-                            self.base_width, previous_dilation, norm_layer,
-                            oneBit_outchannel=oneBit_outchannel, oneBit_inchannel=oneBit_inchannel,
-                            mid_oneBit=mid_oneBit, first_conv=first_conv))
+                            self.base_width, previous_dilation, norm_layer, first_conv=first_conv))
         self.inplanes = planes * block.expansion
 
         for i in range(1, blocks):
             if i == blocks - 1:
                 layers.append(block(args, self.inplanes, planes, groups=self.groups,
                                     base_width=self.base_width, dilation=self.dilation,
-                                    norm_layer=norm_layer,
-                                    oneBit_outchannel=oneBit_outchannel, oneBit_inchannel=oneBit_outchannel,
-                                    mid_oneBit=mid_oneBit, last_conv=last_conv))
+                                    norm_layer=norm_layer, last_conv=last_conv))
             else:
                 layers.append(block(args, self.inplanes, planes, groups=self.groups,
                                     base_width=self.base_width, dilation=self.dilation,
-                                    norm_layer=norm_layer,
-                                    oneBit_outchannel=oneBit_outchannel, oneBit_inchannel=oneBit_outchannel,
-                                    mid_oneBit=mid_oneBit))
+                                    norm_layer=norm_layer))
 
         return nn.Sequential(*layers)
 
@@ -366,7 +152,8 @@ class QResNet(nn.Module):
 
 
 def _resnet_quant(args, arch, block, layers, pretrained, progress, **kwargs):
-    model = QResNet(args, block, layers, **kwargs)
+    groups = args.groups
+    model = QResNet(args, block, layers, groups=groups, **kwargs)
     if pretrained:
         state_dict = load_state_dict_from_url(model_urls[arch],
                                               progress=progress)
@@ -408,62 +195,9 @@ def resnet50_quant(args, pretrained=False, progress=True, **kwargs):
     return _resnet_quant(args, 'resnet50', QBottleneck, [3, 4, 6, 3], pretrained, progress,
                          **kwargs)
 
-
-
-import torch
-import torch.nn as nn
-import math
-import numpy as np
-from torch.hub import load_state_dict_from_url
-from imagenet_model.quant_conv import QConv, QConv_Tra_Mulit, SwitchableBatchNorm2d, SwitchableBatchNorm2d_Tra_Mulit
-from .shuffle_utils import channel_shuffle_mv1
-
-
-
-class QDepthwiseSeparableConv(nn.Module):
-    def __init__(self, args, inp=0, outp=0, stride=0,
-                 oneBit_outchannel=0, oneBit_inchannel=0,
-                 last_conv=False, first_conv=False, channel_shuffle=False):
-        super(QDepthwiseSeparableConv, self).__init__()
-        assert stride in [1, 2]
-        self.weight_bit = 2
-        self.act_bit = 8
-        self.last_conv = last_conv
-        self.first_conv = first_conv
-        self.basewidth = inp // args.groups
-        self.channel_shuffle = channel_shuffle
-
-        layers = [
-            QConv_Tra_Mulit(inp, inp, kernel_size=3, stride=stride,
-                            padding=1, groups=inp, bias=False, dilation=1, args=args,
-                            oneBit_outchannel=oneBit_inchannel,
-                            basewidth=self.basewidth,
-                            first_conv=first_conv),
-            SwitchableBatchNorm2d_Tra_Mulit(inp, basewidth=self.basewidth, oneBit_outchannel=oneBit_inchannel),
-            nn.ReLU(inplace=True),
-
-            QConv(inp, outp, kernel_size=1, stride=1,
-                     padding=0, groups=args.groups, bias=False, args=args,
-                     oneBit_outchannel=oneBit_outchannel, oneBit_inchannel=oneBit_inchannel,
-                     last_conv=last_conv),
-            SwitchableBatchNorm2d(outp, groups=args.groups, oneBit_outchannel=oneBit_outchannel),
-            nn.ReLU(inplace=True),
-        ]
-        self.body = nn.Sequential(*layers)
-
-    def forward(self, x):
-        out = self.body(x)
-        # if self.channel_shuffle:
-        #     out = channel_shuffle_mv1(out, self.weight_bit // 2, self.weight_bit)
-        if self.last_conv:
-            out = out.chunk((self.weight_bit + 1) // 2, dim=1)
-            out = torch.mean(torch.stack(out, dim=0), dim=0)
-        return out
-
-
-class Model(nn.Module):
+class MobileNetV1(nn.Module):
     def __init__(self, args, num_classes=1000):
-        super(Model, self).__init__()
+        super(MobileNetV1, self).__init__()
 
         # setting of inverted residual blocks
         self.block_setting = [
@@ -475,8 +209,6 @@ class Model(nn.Module):
             [1024, 2, 2],
         ]
 
-        oneBit = [52, 40, 101, 148, 223, 373, 404, 236, 376, 419, 233, 892, 1024]
-        # oneBit = [56, 43, 108, 156, 240, 404, 435, 250, 404, 450, 250, 962, 1024]
         j = 0
         # head
         channels = 32
@@ -499,17 +231,14 @@ class Model(nn.Module):
                     if i == 0:
                         setattr(self, 'stage_{}_layer_{}'.format(idx, i),
                                 QDepthwiseSeparableConv(args, inp=channels, outp=outp, stride=s,
-                                                        oneBit_inchannel=oneBit[j - 1], oneBit_outchannel=oneBit[j],
                                                         channel_shuffle=(i == n//2-1)))
                     elif i == n - 1:
                         setattr(self, 'stage_{}_layer_{}'.format(idx, i),
                                 QDepthwiseSeparableConv(args, inp=channels, outp=outp, stride=1, last_conv=True,
-                                                        oneBit_inchannel=oneBit[j - 1], oneBit_outchannel=oneBit[j],
                                                         channel_shuffle=(i == n//2-1)))
                     else:
                         setattr(self, 'stage_{}_layer_{}'.format(idx, i),
                                 QDepthwiseSeparableConv(args, inp=channels, outp=outp, stride=1,
-                                                        oneBit_inchannel=oneBit[j - 1], oneBit_outchannel=oneBit[j],
                                                         channel_shuffle=(i == n//2-1)))
                     channels = outp
                     j += 1
@@ -518,7 +247,7 @@ class Model(nn.Module):
                     assert n == 1
                     setattr(self, 'stage_{}_layer_{}'.format(idx, i),
                             QDepthwiseSeparableConv(args, inp=channels, outp=outp, stride=s,
-                                                    oneBit_inchannel=32, oneBit_outchannel=oneBit[j], first_conv=True))
+                                                    first_conv=True))
                     channels = outp
                     j += 1
             else:
@@ -526,17 +255,14 @@ class Model(nn.Module):
                     if i == 0:
                         setattr(self, 'stage_{}_layer_{}'.format(idx, i),
                             QDepthwiseSeparableConv(args, inp=channels, outp=outp, stride=s,
-                                                    oneBit_inchannel=oneBit[j-1], oneBit_outchannel=oneBit[j],
                                                     channel_shuffle=(i == n//2-1)))
                     elif i == n - 1:
                         setattr(self, 'stage_{}_layer_{}'.format(idx, i),
                             QDepthwiseSeparableConv(args, inp=channels, outp=outp, stride=1,
-                                                    oneBit_inchannel=oneBit[j-1], oneBit_outchannel=oneBit[j],
                                                     channel_shuffle=(i == n//2-1)))
                     else:
                         setattr(self, 'stage_{}_layer_{}'.format(idx, i),
                             QDepthwiseSeparableConv(args, inp=channels, outp=outp, stride=1,
-                                                    oneBit_inchannel=oneBit[j-1], oneBit_outchannel=oneBit[j],
                                                     channel_shuffle=(i == n//2-1)))
                     channels = outp
                     j += 1
@@ -592,4 +318,4 @@ class Model(nn.Module):
 
 
 def mv1_quant(args, **kwargs):
-    return Model(args)
+    return MobileNetV1(args)
