@@ -44,7 +44,6 @@ class QConv(nn.Conv2d):
         self.register_buffer('init', torch.tensor([0]))
 
         # not used
-        self.output_scale = nn.ParameterList([nn.Parameter(data=torch.tensor(1).float()) for _ in range(7)])
         self.hook_Qvalues = False
         self.buff_weight = None
         self.buff_act = None
@@ -97,7 +96,7 @@ class QConv(nn.Conv2d):
 
     def initialize(self, x):
         FPweight, FPact = self.weight.detach(), x.detach()
-        FPweight_1, FPweight_2, FPact_1, FPact_2 = self.select(FPweight, FPact)
+        FPweight_1, FPact_1 = self.select(FPweight, FPact)
 
         index = self.act_bit - 2
 
@@ -398,7 +397,7 @@ class SwitchableBatchNorm2d(nn.Module):
         self.act_bit = 2
 
     def forward(self, x):
-        index = self.weight_bit - 2
+        index = (self.weight_bit // 2) - 1
         output = self.bn[index](x)
         return output
 
@@ -421,8 +420,7 @@ class QLinear(nn.Linear):
             self.lA = nn.Parameter(data=torch.tensor(0).float())
 
         self.register_buffer('init', torch.tensor([0]))
-        self.output_scale = nn.Parameter(data=torch.tensor(1).float())
-
+       
     def weight_quantization(self, weight):
         if not self.quan_weight:
             return weight
@@ -457,8 +455,7 @@ class QLinear(nn.Linear):
 
         Qout = F.linear(Qact, Qweight, self.bias)
         out = F.linear(x, self.weight, self.bias)
-        self.output_scale.data.fill_(out.abs().mean() / Qout.abs().mean())
-
+        
     def forward(self, x):
         if self.init == 1:
             self.initialize(x)
@@ -471,6 +468,6 @@ class QLinear(nn.Linear):
         if self.quan_act:
             Qact = self.act_quantization(Qact)
 
-        output = F.linear(Qact, Qweight, self.bias) * torch.abs(self.output_scale)
+        output = F.linear(Qact, Qweight, self.bias)
 
         return output

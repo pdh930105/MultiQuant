@@ -4,6 +4,96 @@ from .shuffle_utils import channel_shuffle
 import torch
 import torch.nn as nn
 
+
+class QBasicBlock4Cifar(nn.Module):
+    def __init__(self, args, inplanes, planes, stride=1, groups=1, dilation=1,
+                 norm_layer=None, last_conv=False, first_conv=False, r8=False):
+        super(QBasicBlock4Cifar, self).__init__()
+
+        self.stride = stride
+        self.groups = groups
+        self.weight_bit = 2
+        self.act_bit = 8
+        self.last_conv = last_conv
+        self.first_conv = first_conv
+        self.inplanes = inplanes
+        self.r8 = r8
+        self.planes = planes
+        assert not self.last_conv or not self.first_conv
+
+        if norm_layer is None:
+            norm_layer = SwitchableBatchNorm2d
+        if dilation > 1:
+            raise NotImplementedError("Dilation > 1 not supported in BasicBlock")
+
+        if first_conv:
+            self.conv1 = QConv3x3(args, inplanes, planes, stride, groups=groups,
+                                  first_conv=first_conv)
+        else:
+            self.conv1 = QConv3x3(args, inplanes, planes, stride, groups=groups)
+
+        self.bn1 = norm_layer(planes, groups=groups)
+        self.relu = nn.ReLU(inplace=True)
+
+        if last_conv:
+            self.conv2 = QConv3x3(args, planes, planes, groups=groups, last_conv=last_conv)
+            self.bn2 = norm_layer(planes, groups=groups, last_conv=last_conv)
+
+        else:
+            self.conv2 = QConv3x3(args, planes, planes, groups=groups)
+            self.bn2 = norm_layer(planes, groups=groups)
+
+        self.shortcut = nn.Sequential()
+        if stride != 1 or inplanes != planes:
+            if r8:
+                self.shortcut = nn.Sequential(
+                QConv1x1(args, inplanes, planes, stride, groups=self.groups, last_conv=last_conv),
+                norm_layer(planes, groups=groups, last_conv=last_conv),
+            )
+            else:
+                self.shortcut = nn.Sequential(
+                        QConv1x1(args, inplanes, planes, stride, groups=self.groups),
+                        norm_layer(planes, groups=groups)
+                        )
+
+    def select(self, identity):
+        assert (self.weight_bit & 1) == 0, "only support 2^k module"
+        index = self.inplanes // self.groups * (self.weight_bit // 2)
+        return identity[:, :index, :, :]
+
+    def addZeroS(self, identity):
+        if (self.weight_bit & 1) == 0:
+            return identity
+
+    def forward(self, x):
+        identity = x
+        print("before shape : ", x.shape)
+        if self.first_conv:
+            identity = self.select(identity)
+        print("after shape : ", identity.shape)
+
+        out = self.conv1(x)
+        print("out shape : ", out.shape)
+        out = self.bn1(out)
+
+        out = self.relu(out)
+
+        out = self.conv2(out)
+        out = self.bn2(out)
+
+        if self.last_conv:
+            identity = self.addZeroS(identity)
+        # out = channel_shuffle(out, self.weight_bit // 2, self.weight_bit)
+        out += self.shortcut(identity)
+        out = self.relu(out)
+
+        if self.last_conv:
+            out = out.chunk((self.weight_bit + 1) // 2, dim=1)
+            out = torch.mean(torch.stack(out, dim=0), dim=0)
+
+        return out
+
+
 class QBasicBlock(nn.Module):
     expansion = 1
 

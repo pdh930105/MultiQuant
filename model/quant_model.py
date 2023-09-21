@@ -3,7 +3,7 @@
 import torch
 import torch.nn as nn
 from torch.hub import load_state_dict_from_url
-from .quant_modules import QConv, QLinear, SwitchableBatchNorm2d, QBasicBlock, QBottleneck, QDepthwiseSeparableConv
+from .quant_modules import QConv, QLinear, SwitchableBatchNorm2d, QBasicBlock, QBottleneck, QDepthwiseSeparableConv, QBasicBlock4Cifar
 from .quant_ops import QConv1x1, QConv3x3
 from .shuffle_utils import channel_shuffle
 
@@ -13,6 +13,98 @@ model_urls = {
     'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
     'resnet34': 'https://download.pytorch.org/models/resnet34-333f7ec4.pth',
 }
+
+
+class QResNet4Cifar(nn.Module):
+    def __init__(self, args, block, layers, num_classes=10, groups=1, norm_layer=None):
+        super(QResNet4Cifar, self).__init__()
+
+        if norm_layer is None:
+            norm_layer = SwitchableBatchNorm2d
+        self._norm_layer = norm_layer
+
+        self.groups = args.groups
+        self.inplanes = 16 * self.groups
+
+        self.conv1 = nn.Conv2d(3, self.inplanes, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(self.inplanes)
+        self.relu = nn.ReLU(inplace=True)
+
+        if layers == [1, 1, 1]: # for resnet8
+            self.layer1 = self._make_layer(args, block, 16 * self.groups, layers[0], stride=1,
+                                            first_conv=True)
+            self.layer2 = self._make_layer(args, block, 32 * self.groups, layers[1], stride=2,
+                                           )
+            self.layer3 = self._make_layer(args, block, 64 * self.groups, layers[2], stride=2,
+                                           last_conv=True)
+        else: # for resnet20
+            self.layer1 = self._make_layer(args, block, 16 * self.groups, layers[0], stride=1,
+                                            first_conv=True)
+            self.layer2 = self._make_layer(args, block, 32 * self.groups, layers[1], stride=2,
+                                           )
+            self.layer3 = self._make_layer(args, block, 64 * self.groups, layers[2], stride=2,
+                                           last_conv=True)
+
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Linear(64, num_classes)
+        
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d) or isinstance(m, QConv):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+
+    def _make_layer(self, args, block, planes, blocks, stride=1, last_conv=False, first_conv=False):
+        norm_layer = self._norm_layer
+        strides = [stride] + [1] * (blocks - 1)
+        layers = []
+        # for resnet-8
+        if len(strides) == 1:
+            layers.append(block(args, self.inplanes, planes, stride, self.groups,
+                                norm_layer=norm_layer,
+                                first_conv=first_conv, last_conv=last_conv, r8=True
+                                ))
+            self.inplanes = planes
+        else:
+            for i, stride in enumerate(strides):
+                if i == 0:
+                    layers.append(block(args, self.inplanes, planes, stride, self.groups,
+                                        norm_layer=norm_layer,
+                                        first_conv=first_conv
+                                        ))
+                elif i == len(strides)-1:
+                    layers.append(block(args, self.inplanes, planes, stride, self.groups,
+                                        norm_layer=norm_layer,
+                                        last_conv=last_conv
+                                        ))
+                else:
+                    layers.append(block(args, self.inplanes, planes, stride, self.groups,
+                                        norm_layer=norm_layer,
+                                        ))
+
+                self.inplanes = planes
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+
+
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = self.relu(out)
+
+        out = out.tile(1, self.groups, 1, 1)
+
+        out = self.layer1(out)
+        out = self.layer2(out)
+        out = self.layer3(out)
+
+        out = self.avg_pool(out)
+        out = out.view(out.size(0), -1)
+        out = self.fc(out)
+
+        return out
 
 class QResNet(nn.Module):
 
@@ -194,6 +286,12 @@ def resnet50_quant(args, pretrained=False, progress=True, **kwargs):
     """
     return _resnet_quant(args, 'resnet50', QBottleneck, [3, 4, 6, 3], pretrained, progress,
                          **kwargs)
+
+def resnet20_cifar(args, **kwargs):
+    return QResNet4Cifar(args, QBasicBlock4Cifar, [3, 3, 3], **kwargs)
+
+def resnet8_cifar(args, **kwargs):
+    return QResNet4Cifar(args, QBasicBlock4Cifar, [1, 1, 1], **kwargs)
 
 class MobileNetV1(nn.Module):
     def __init__(self, args, num_classes=1000):
